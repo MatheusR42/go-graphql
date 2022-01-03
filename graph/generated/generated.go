@@ -8,6 +8,7 @@ import (
 	"errors"
 	"strconv"
 	"sync"
+	"sync/atomic"
 
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/99designs/gqlgen/graphql/introspection"
@@ -34,6 +35,8 @@ type Config struct {
 }
 
 type ResolverRoot interface {
+	Category() CategoryResolver
+	Course() CourseResolver
 	Mutation() MutationResolver
 	Query() QueryResolver
 }
@@ -50,10 +53,9 @@ type ComplexityRoot struct {
 	}
 
 	Chapter struct {
-		Category func(childComplexity int) int
-		Course   func(childComplexity int) int
-		ID       func(childComplexity int) int
-		Name     func(childComplexity int) int
+		Course func(childComplexity int) int
+		ID     func(childComplexity int) int
+		Name   func(childComplexity int) int
 	}
 
 	Course struct {
@@ -77,6 +79,12 @@ type ComplexityRoot struct {
 	}
 }
 
+type CategoryResolver interface {
+	Courses(ctx context.Context, obj *model.Category) ([]*model.Course, error)
+}
+type CourseResolver interface {
+	Chapters(ctx context.Context, obj *model.Course) ([]*model.Chapter, error)
+}
 type MutationResolver interface {
 	CreateCategory(ctx context.Context, input model.NewCategory) (*model.Category, error)
 	CreateCourse(ctx context.Context, input model.NewCourse) (*model.Course, error)
@@ -130,13 +138,6 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.Category.Name(childComplexity), true
-
-	case "Chapter.category":
-		if e.complexity.Chapter.Category == nil {
-			break
-		}
-
-		return e.complexity.Chapter.Category(childComplexity), true
 
 	case "Chapter.course":
 		if e.complexity.Chapter.Course == nil {
@@ -334,7 +335,6 @@ type Chapter {
   id: ID!
   name: String!
   course: Course!
-  category: Category!
 }
 
 input NewCategory {
@@ -582,14 +582,14 @@ func (ec *executionContext) _Category_courses(ctx context.Context, field graphql
 		Object:     "Category",
 		Field:      field,
 		Args:       nil,
-		IsMethod:   false,
-		IsResolver: false,
+		IsMethod:   true,
+		IsResolver: true,
 	}
 
 	ctx = graphql.WithFieldContext(ctx, fc)
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
 		ctx = rctx // use context from middleware stack in children
-		return obj.Courses, nil
+		return ec.resolvers.Category().Courses(rctx, obj)
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -709,41 +709,6 @@ func (ec *executionContext) _Chapter_course(ctx context.Context, field graphql.C
 	res := resTmp.(*model.Course)
 	fc.Result = res
 	return ec.marshalNCourse2ᚖgithubᚗcomᚋmatheusr42ᚋgoᚑgraphqlᚋgraphᚋmodelᚐCourse(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) _Chapter_category(ctx context.Context, field graphql.CollectedField, obj *model.Chapter) (ret graphql.Marshaler) {
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	fc := &graphql.FieldContext{
-		Object:     "Chapter",
-		Field:      field,
-		Args:       nil,
-		IsMethod:   false,
-		IsResolver: false,
-	}
-
-	ctx = graphql.WithFieldContext(ctx, fc)
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.Category, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(*model.Category)
-	fc.Result = res
-	return ec.marshalNCategory2ᚖgithubᚗcomᚋmatheusr42ᚋgoᚑgraphqlᚋgraphᚋmodelᚐCategory(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) _Course_id(ctx context.Context, field graphql.CollectedField, obj *model.Course) (ret graphql.Marshaler) {
@@ -894,14 +859,14 @@ func (ec *executionContext) _Course_chapters(ctx context.Context, field graphql.
 		Object:     "Course",
 		Field:      field,
 		Args:       nil,
-		IsMethod:   false,
-		IsResolver: false,
+		IsMethod:   true,
+		IsResolver: true,
 	}
 
 	ctx = graphql.WithFieldContext(ctx, fc)
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
 		ctx = rctx // use context from middleware stack in children
-		return obj.Chapters, nil
+		return ec.resolvers.Course().Chapters(rctx, obj)
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -2453,20 +2418,29 @@ func (ec *executionContext) _Category(ctx context.Context, sel ast.SelectionSet,
 		case "id":
 			out.Values[i] = ec._Category_id(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				invalids++
+				atomic.AddUint32(&invalids, 1)
 			}
 		case "name":
 			out.Values[i] = ec._Category_name(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				invalids++
+				atomic.AddUint32(&invalids, 1)
 			}
 		case "description":
 			out.Values[i] = ec._Category_description(ctx, field, obj)
 		case "courses":
-			out.Values[i] = ec._Category_courses(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				invalids++
-			}
+			field := field
+			out.Concurrently(i, func() (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Category_courses(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&invalids, 1)
+				}
+				return res
+			})
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -2504,11 +2478,6 @@ func (ec *executionContext) _Chapter(ctx context.Context, sel ast.SelectionSet, 
 			if out.Values[i] == graphql.Null {
 				invalids++
 			}
-		case "category":
-			out.Values[i] = ec._Chapter_category(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				invalids++
-			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -2534,22 +2503,31 @@ func (ec *executionContext) _Course(ctx context.Context, sel ast.SelectionSet, o
 		case "id":
 			out.Values[i] = ec._Course_id(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				invalids++
+				atomic.AddUint32(&invalids, 1)
 			}
 		case "name":
 			out.Values[i] = ec._Course_name(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				invalids++
+				atomic.AddUint32(&invalids, 1)
 			}
 		case "description":
 			out.Values[i] = ec._Course_description(ctx, field, obj)
 		case "category":
 			out.Values[i] = ec._Course_category(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				invalids++
+				atomic.AddUint32(&invalids, 1)
 			}
 		case "chapters":
-			out.Values[i] = ec._Course_chapters(ctx, field, obj)
+			field := field
+			out.Concurrently(i, func() (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Course_chapters(ctx, field, obj)
+				return res
+			})
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

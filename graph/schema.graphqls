@@ -17,7 +17,6 @@ type Chapter {
   id: ID!
   name: String!
   course: Course!
-  category: Category!
 }
 
 input NewCategory {
